@@ -1,10 +1,10 @@
 # SortiePlus v3.0
 
+Comprehensive Windower addon for tracking Sortie objectives, NMs, and boss info in FFXI.
+
 Upgraded version of Sortie by Mirdain, modified by Cypan (Bahamut).
 Install to `Windower/addons/SortiePlus/` and load with `//lua load sortieplus`.
 The `//sort` and `//sortie` commands are unchanged.
-
-Comprehensive Windower addon for tracking Sortie objectives, NMs, and boss info in FFXI.
 
 ## Features
 
@@ -27,10 +27,49 @@ Comprehensive Windower addon for tracking Sortie objectives, NMs, and boss info 
 | `//sort [a-h]` | Switch sector display |
 | `//sort on/off` | Toggle addon |
 | `//sort boss` | Toggle boss info panel |
+| `//sort obj` | Toggle objectives display |
+| `//sort loot` | Toggle loot/gallimaufry display |
+| `//sort all` | Minimal mode (NM + Bitzer only) |
+| `//sort bscan` | Scan Bitzers zone-wide |
 | `//sort save` | Save position settings |
+| `//sort track #` | Track mob by widescan index |
+| `//sort scan #` | Query mob info by index |
 | `//sort debug` | Toggle debug output |
 | `//sort zone` | Show current zone ID |
 | `//sort help` | Show command list in-game |
+
+## How It Works
+
+The display auto-activates when entering Outer Ra'Kaznar (Zone 133/189).
+
+Select your sector by clicking [A]-[H] in the floor bar or typing `//sort a` through `//sort h`.
+
+NM tracking uses widescan packets - you must be on the correct floor (A-D upstairs, E-H requires entering basement).
+
+Bitzers are not mobs and can only be tracked within ~50 yalms.
+
+The addon parses incoming chat for objective completion status reports and NM death messages.
+
+## Sector Quick Reference
+
+- **A-D** (Ground Floor): 8 objectives each (5 Brown + 2 Blue + 1 Red)
+- **E-H** (Basement): 4 objectives each (1 Brown + 2 Blue + 1 Red)
+- **Aurum Coffer (F1)**: Kill all 4 upstairs NMs (Obdella, Porxie, Bhoot, Deleterious)
+- **Aminon**: Requires Fragments 1-4 from basement bosses (Dhartok, Gartell, Triboulex, Aita)
+
+## Data Sources
+
+Objective data compiled from:
+- [bg-wiki Category:Sortie](https://www.bg-wiki.com/ffxi/Category:Sortie)
+- [FFXIclopedia Sortie](https://ffxiclopedia.fandom.com/wiki/Category:Sortie)
+- [FFXIAH Sortie Guide](https://www.ffxiah.com/node/469)
+- [bg-wiki Sortie Strategies](https://www.bg-wiki.com/ffxi/Sortie_Strategies)
+
+Objectives marked with `(?)` are community-speculated but not fully confirmed.
+
+## Note on Windowed Mode
+
+If clicking the floor selector doesn't work, you're likely in windowed mode. The window taskbar (50px) and title bar (25px) offset mouse coordinates. Adjust your game resolution settings accordingly.
 
 ## Credits
 
@@ -39,9 +78,10 @@ Comprehensive Windower addon for tracking Sortie objectives, NMs, and boss info 
 
 ## Support
 
-First and foremost: Please support the original author if this is an addon modification. 
-If you enjoy the addon and you'd like to buy me a coffee, it's appreciated but never expected:
+These addons are free and always will be. If one of them saved you some time
+and you'd like to buy me a coffee, it's appreciated but never expected:
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-cypan-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/cypan)
 
-Bug reports and pull requests are worth more than donations, so open an issue if something's broken please.
+Bug reports and pull requests are worth more than donations. Open an issue if
+something's broken.

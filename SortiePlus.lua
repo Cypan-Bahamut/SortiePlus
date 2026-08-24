@@ -20,6 +20,9 @@ local bit = require 'bit'
 default = {
     debug = false,
     show_boss_info = true,
+    show_obj = true,
+    show_loot = true,
+    hide_all = false,
     Tracking_Box = {
         text = {size=10, font='Consolas', red=255, green=255, blue=255, alpha=255},
         pos  = {x=1313, y=623},
@@ -162,7 +165,7 @@ end
 -- objects BEFORE their objective is earned, so get_mob_by_index polling
 -- false-positives. Detection uses 0x05B spawn packets instead (the packet
 -- fires only when the chest becomes visible) — technique from v6/SortieHUD,
--- IDs from Team Cy's own logged targeting data.
+-- IDs from logged in-game targeting data.
 chest_seen_this_run = {}
 
 ----------------------------------------------------------------------
@@ -866,11 +869,14 @@ function tracking_box_update()
     local player = windower.ffxi.get_mob_by_target('me')
     local sector_index = string.byte(location) - string.byte('A') + 1
 
-    -- Header with objective progress
-    local obj_count = objectives_done[location] or 0
-    local obj_total = #sector.objs
-    lines:insert("  Sector "..location.." ["..obj_count.."/"..obj_total.."]  "..sector.title)
-    lines:insert(string.rep('-', maxWidth))
+    -- Header with objective progress (hidden in minimal mode)
+    local minimal = settings.hide_all
+    if not minimal then
+        local obj_count = objectives_done[location] or 0
+        local obj_total = #sector.objs
+        lines:insert("  Sector "..location.." ["..obj_count.."/"..obj_total.."]  "..sector.title)
+        lines:insert(string.rep('-', maxWidth))
+    end
 
     -- NM tracking
     if mob_tracking[sector_index] then
@@ -914,9 +920,10 @@ function tracking_box_update()
         end
     end
 
-    lines:insert("")
+    if not minimal and settings.show_obj then lines:insert("") end
 
-    -- Objectives with color coding (green = done)
+    -- Objectives with color coding (green = done) — //sort obj toggles
+    if settings.show_obj and not minimal then
     for _, obj in ipairs(sector.objs) do
         local done = obj_is_done(obj, location)
         local tag = type_tag(obj.type, done)
@@ -944,9 +951,10 @@ function tracking_box_update()
     if sector.boss_drops then
         lines:insert(" Drops: "..sector.boss_drops)
     end
+    end -- show_obj gate
 
-    -- Boss info
-    if settings.show_boss_info and boss_info[location] then
+    -- Boss info — //sort boss toggles (also covers counter + nuke timer)
+    if settings.show_boss_info and not minimal and boss_info[location] then
         local bi = boss_info[location]
         lines:insert("")
         lines:insert(" Boss: "..bi.name)
@@ -954,8 +962,8 @@ function tracking_box_update()
         lines:insert("  Metal: "..bi.metal)
     end
 
-    -- Boss element counter (D=Degei, H=Aita)
-    if location == 'D' or location == 'H' then
+    -- Boss element counter (D=Degei, H=Aita) — under boss toggle
+    if settings.show_boss_info and not minimal and (location == 'D' or location == 'H') then
         if boss_counter then
             local ec = element_colors[boss_counter]
             if ec then
@@ -968,9 +976,9 @@ function tracking_box_update()
         end
     end
 
-    -- Boss nuke timer (C/D/G/H)
+    -- Boss nuke timer (C/D/G/H) — under boss toggle
     local nuke = boss_nuke_info[location]
-    if nuke then
+    if nuke and settings.show_boss_info and not minimal then
         if boss_timer_active and boss_timer_start then
             local elapsed = os.clock() - boss_timer_start
             local remaining = nuke.interval - elapsed
@@ -996,8 +1004,8 @@ function tracking_box_update()
         end
     end
 
-    -- Aurum Coffer tracking
-    if location >= 'A' and location <= 'D' then
+    -- Aurum Coffer tracking — under obj toggle
+    if settings.show_obj and not minimal and location >= 'A' and location <= 'D' then
         -- F1: 1 Naakual kill required (tracked via upstairs NM kills)
         local aurum_count = 0
         local aurum_parts = {}
@@ -1014,7 +1022,7 @@ function tracking_box_update()
         local prog = aurum_progress.F1_cur..'/'..aurum_progress.F1_max
         lines:insert("")
         lines:insert(" "..aurum_color.."Aurum (F1): "..prog.."  NMs: "..table.concat(aurum_parts, " ")..aurum_end)
-    elseif location >= 'E' and location <= 'H' then
+    elseif settings.show_obj and not minimal and location >= 'E' and location <= 'H' then
         -- F2: 2 conditions from status report #?: X/2
         local aurum_color = aurum_done.F2 and '\\cs(0,255,0)' or ''
         local aurum_end = aurum_done.F2 and '\\cr' or ''
@@ -1023,13 +1031,15 @@ function tracking_box_update()
         lines:insert(" "..aurum_color.."Aurum (F2): "..prog..aurum_end)
     end
 
-    -- Gallimaufry + Sortie loot (since addon load) — restored v6 format
-    lines:insert("")
-    lines:insert(string.format(" Galli: \\cs(0,255,0)%d\\cr  (+%d session)", galli_total, galli_session))
-    lines:insert(string.format(" Loot: Sapph \\cs(0,255,0)%d\\cr Star \\cs(0,255,0)%d\\cr Case \\cs(0,255,0)%d\\cr/+1 \\cs(0,255,0)%d\\cr/+2 \\cs(0,255,0)%d\\cr",
-        loot_count.sapphire, loot_count.starstone, loot_count.old_case, loot_count.old_case_p1, loot_count.old_case_p2))
-    lines:insert(string.format(" Mats: Eik \\cs(0,255,0)%d\\cr Oct \\cs(0,255,0)%d\\cr Hex \\cs(0,255,0)%d\\cr Meso \\cs(0,255,0)%d\\cr",
-        loot_count.eikondrite, loot_count.octahedrite, loot_count.hexahedrite, loot_count.mesosiderite))
+    -- Gallimaufry + Sortie loot (since addon load) — //sort loot toggles
+    if settings.show_loot and not minimal then
+        lines:insert("")
+        lines:insert(string.format(" Galli: \\cs(0,255,0)%d\\cr  (+%d session)", galli_total, galli_session))
+        lines:insert(string.format(" Loot: Sapph \\cs(0,255,0)%d\\cr Star \\cs(0,255,0)%d\\cr Case \\cs(0,255,0)%d\\cr/+1 \\cs(0,255,0)%d\\cr/+2 \\cs(0,255,0)%d\\cr",
+            loot_count.sapphire, loot_count.starstone, loot_count.old_case, loot_count.old_case_p1, loot_count.old_case_p2))
+        lines:insert(string.format(" Mats: Eik \\cs(0,255,0)%d\\cr Oct \\cs(0,255,0)%d\\cr Hex \\cs(0,255,0)%d\\cr Meso \\cs(0,255,0)%d\\cr",
+            loot_count.eikondrite, loot_count.octahedrite, loot_count.hexahedrite, loot_count.mesosiderite))
+    end
 
     lines:insert("")
     lines:insert(' Running....                                ['..gears[gear]..']')
@@ -1113,6 +1123,18 @@ function commands(input, args)
         settings.show_boss_info = not settings.show_boss_info
         windower.add_to_chat(8, 'Sortie: Boss info '..(settings.show_boss_info and 'ON' or 'OFF'))
 
+    elseif cmd == 'obj' then
+        settings.show_obj = not settings.show_obj
+        windower.add_to_chat(8, 'Sortie: Objectives '..(settings.show_obj and 'ON' or 'OFF'))
+
+    elseif cmd == 'loot' then
+        settings.show_loot = not settings.show_loot
+        windower.add_to_chat(8, 'Sortie: Loot/Galli '..(settings.show_loot and 'ON' or 'OFF'))
+
+    elseif cmd == 'all' then
+        settings.hide_all = not settings.hide_all
+        windower.add_to_chat(8, 'Sortie: Minimal mode '..(settings.hide_all and 'ON (NM+Bitzer only)' or 'OFF'))
+
     elseif cmd == 'debug' then
         settings.debug = not settings.debug
         windower.add_to_chat(8, 'Sortie: Debug '..(settings.debug and 'ON' or 'OFF'))
@@ -1126,6 +1148,9 @@ function commands(input, args)
         windower.add_to_chat(8, '  //sort [a-h]    - Switch sector display')
         windower.add_to_chat(8, '  //sort on/off    - Toggle addon')
         windower.add_to_chat(8, '  //sort boss      - Toggle boss info display')
+        windower.add_to_chat(8, '  //sort obj       - Toggle objectives display')
+        windower.add_to_chat(8, '  //sort loot      - Toggle loot/galli display')
+        windower.add_to_chat(8, '  //sort all       - Minimal mode (NM+Bitzer only)')
         windower.add_to_chat(8, '  //sort bscan     - Scan Bitzers zone-wide')
         windower.add_to_chat(8, '  //sort save      - Save position settings')
         windower.add_to_chat(8, '  //sort track #   - Track mob by widescan index')
