@@ -1,8 +1,8 @@
 _addon.name = 'SortiePlus'
-_addon.author = 'Mirdain; Modified by Cypan (Bahamut)'
-_addon.version = '3.0 Windower'
-_addon_description = 'Comprehensive Sortie objective tracker with completion detection'
-_addon.commands = {'sortie','sort'}
+_addon.author = 'Mirdain; SortiePlus fork by Cypan (Bahamut)'
+_addon.version = '1.0'
+_addon_description = 'Sortie objective, NM, boss and loot tracker with auto-sector switching'
+_addon.commands = {'sortieplus','sortie','sort'}
 
 packets = require 'packets'
 config = require 'config'
@@ -20,6 +20,8 @@ local bit = require 'bit'
 default = {
     debug = false,
     show_boss_info = true,
+    echo_proc = true,
+    auto_sector_target = true,
     show_obj = true,
     show_loot = true,
     hide_all = false,
@@ -62,10 +64,16 @@ items_got = {}
 bitzer_pos = {}
 bitzer_scanning = {}  -- bitzer_scanning[index] = true while waiting for 0x0E response
 
+-- Target-driven sector switch: lowercased mob name -> sector letter.
+-- Filled in two halves so neither can drift from the table it came from:
+-- the roaming NMs from mob_tracking in initialize(), the sector bosses from
+-- boss_info immediately below its definition.
+local nm_sector = {}
+
 ----------------------------------------------------------------------
 -- Chest ID mapping (PRIMARY DETECTION SOURCE)
 --
--- Source: derived from in-game log analysis (2026-07-28). Confirmed by
+-- Source: derived from Cypan's 2026-07-28 log analysis. Confirmed by
 -- direct observation of the game's targeting output. Chest entity IDs
 -- and indices are stable within Ra'Kaznar and only change with SE dev
 -- updates to Sortie itself.
@@ -165,7 +173,7 @@ end
 -- objects BEFORE their objective is earned, so get_mob_by_index polling
 -- false-positives. Detection uses 0x05B spawn packets instead (the packet
 -- fires only when the chest becomes visible) — technique from v6/SortieHUD,
--- IDs from logged in-game targeting data.
+-- IDs from Team Cy's own logged targeting data.
 chest_seen_this_run = {}
 
 ----------------------------------------------------------------------
@@ -206,6 +214,24 @@ local element_colors = {
     Wind    = {100, 255, 100},
 }
 
+-- Sectors whose boss is proc'd off its LAST TP move. Only D (Degei) and
+-- H (Aita) have an encoded move-to-counter table. B (Leshonn) also procs but
+-- its move list is not encoded here yet -- add the sector here once it is.
+local proc_sectors = {D = true, H = true}
+
+-- Every /echo this addon emits contains this literal. The 'incoming text'
+-- handler uses it to recognise its own output; without that guard the echo
+-- (which repeats the TP move name) would retrigger this handler forever.
+local ECHO_TAG = ' >> ['
+
+-- Announce the proc window in game chat: "Flaming Kick >> [Water]".
+-- Deliberately NOT deduped: a repeat of the same move opens a fresh proc
+-- window and has to be called out again even when the element is unchanged.
+local function proc_echo(move, element)
+    if not settings.echo_proc then return end
+    windower.send_command('input /echo '..move..ECHO_TAG..element..']')
+end
+
 ----------------------------------------------------------------------
 -- Boss nuke timer (C/D/G/H have repeating AoE on a fixed interval)
 ----------------------------------------------------------------------
@@ -240,6 +266,10 @@ function initialize()
         [7] = {name = 'Gyvewrapped Naraka',   index = 552, distance = 0, mob_x = nil, mob_y = nil, last_update = 0},
         [8] = {name = 'Haughty Tulittia',     index = 622, distance = 0, mob_x = nil, mob_y = nil, last_update = 0},
     }
+    -- Roaming-NM half of the target map: mob_tracking index i == sector letter i.
+    for i, nm in ipairs(mob_tracking) do
+        nm_sector[nm.name:lower()] = string.char(string.byte('A') + i - 1)
+    end
     objectives_done = {A=0, B=0, C=0, D=0, E=0, F=0, G=0, H=0}
     aurum_done = {F1=false, F2=false}
     aurum_progress = {F1_cur=0, F1_max=1, F2_cur=0, F2_max=2}
@@ -269,6 +299,13 @@ local boss_info = {
     G = {name='Triboulex', weakness='Weak Fire. WS Wall. AoE Bind. Pillar mechanic.',        metal='Blocks Haunt (unremovable curse)'},
     H = {name='Aita',      weakness='Proc like Degei. WS Wall.',                             metal='(unverified)'},
 }
+
+-- Boss half of the target map. Aminon has no sector of its own; Cy's reward
+-- table files it under E, so targeting it lands on the E display.
+for letter, bi in pairs(boss_info) do
+    nm_sector[bi.name:lower()] = letter
+end
+nm_sector['aminon'] = 'E'
 
 ----------------------------------------------------------------------
 -- Comprehensive objective data per sector
@@ -379,12 +416,16 @@ local sector_objectives = {
 -- Formats verified from actual Sortie log:
 --   Status:  "#A treasure coffer status report: 1/8 #?: 0/1."
 --   Temp:    "You obtain the temporary item: Ra'Kaznar shard #A!"
---   Galli:   "Player received 100 gallimaufry for a total of 404630."
---   Kill:    "Player defeats the Abject Acuex."
---   Death:   "Player was defeated by Ghatjot."
+--   Galli:   "Cypan received 100 gallimaufry for a total of 404630."
+--   Kill:    "Cypan defeats the Abject Acuex."
+--   Death:   "Cypan was defeated by Ghatjot."
 ----------------------------------------------------------------------
 windower.register_event('incoming text', function(original, modified, original_mode, modified_mode, blocked)
     if not enabled then return end
+
+    -- Our own proc /echo comes back through this handler carrying the TP move
+    -- name. Drop it before anything downstream can match on it.
+    if original:find(ECHO_TAG, 1, true) then return end
 
     -- Status report: "#A treasure coffer status report: 3/8 #?: 0/1."
     -- Upstairs Aurum (F1): #?: X/1 (need 1 kill for completion)
@@ -421,7 +462,7 @@ windower.register_event('incoming text', function(original, modified, original_m
         log('Temp item: seal')
     end
 
-    -- Gallimaufry: "Player received 100 gallimaufry for a total of 404630."
+    -- Gallimaufry: "Cypan received 100 gallimaufry for a total of 404630."
     -- (original v6 pattern: unanchored — the game only renders your own
     -- galli lines, confirmed in the 07/28 log)
     local galli_gain, galli_tot = original:match("received (%d+) gallimaufry for a total of (%d+)")
@@ -431,7 +472,7 @@ windower.register_event('incoming text', function(original, modified, original_m
         log('Galli +'..galli_gain..' (session '..galli_session..', total '..galli_total..')')
     end
 
-    -- NM kills: "Player defeats the Abject Obdella."
+    -- NM kills: "Cypan defeats the Abject Obdella."
     -- Format is always "defeats the <NM name>"
     for i = 1, 8 do
         if mob_tracking[i] then
@@ -450,7 +491,7 @@ windower.register_event('incoming text', function(original, modified, original_m
 
     -- Boss element tracking (Degei D / Aita H)
     -- Chat format: "Degei uses Flaming Kick." or "Aita readies Icy Grasp."
-    if location == 'D' or location == 'H' then
+    if proc_sectors[location] then
         for tp_name, counter in pairs(tp_to_counter) do
             if original:find(tp_name) then
                 boss_counter = counter
@@ -460,12 +501,21 @@ windower.register_event('incoming text', function(original, modified, original_m
                     boss_timer_active = true
                     log('Boss timer started (first TP)')
                 end
+                -- Echo on the "uses" line only: the counter flips when the
+                -- move lands, and "readies" would fire a second echo for the
+                -- same move.
+                if original:find('uses '..tp_name, 1, true) then
+                    proc_echo(tp_name, counter)
+                end
                 log('Boss TP: '..tp_name..' -> Counter: '..counter)
                 break
             end
         end
         if original:find('Vivisection') then
             boss_counter = nil
+            if original:find('uses Vivisection', 1, true) then
+                proc_echo('Vivisection', 'NONE')
+            end
             -- Reset timer after Vivisection fires
             boss_timer_start = os.clock()
             boss_timer_active = true
@@ -520,21 +570,31 @@ windower.register_event('incoming text', function(original, modified, original_m
             end
         end
         if dest_letter then
-            location = dest_letter
-            local idx = string.byte(location) - string.byte('A') + 1
-            if mob_tracking[idx] then
-                track_on(mob_tracking[idx].index)
-            end
-            -- Reset boss state on sector change
-            boss_timer_start = nil
-            boss_timer_active = false
-            boss_counter = nil
-            -- Auto-scan Bitzers when entering basement
-            if location >= 'E' and location <= 'H' then
-                scan_all_bitzers()
-            end
+            set_sector(dest_letter)
             log('Auto-sector: '..location..' (SuperWarp)')
         end
+    end
+end)
+
+----------------------------------------------------------------------
+-- Target-driven sector switch
+--
+-- Targeting a sector's NM flips the display to that sector, so running
+-- A -> B -> C with the addon open needs no //sort at all. Recognises the
+-- four upstairs bosses, the four basement bosses, Aminon, and the eight
+-- roaming widescan NMs (see nm_sector). Acts only on an actual change of
+-- sector, so re-targeting the NM you are already on is silent.
+-- Toggle: //sort auto.
+----------------------------------------------------------------------
+windower.register_event('target change', function(new_index)
+    if not enabled or not settings.auto_sector_target then return end
+    if not new_index or new_index == 0 then return end
+    local mob = windower.ffxi.get_mob_by_index(new_index)
+    if not mob or not mob.name then return end
+    local dest = nm_sector[mob.name:lower()]
+    if dest and dest ~= location then
+        set_sector(dest)
+        windower.add_to_chat(8, 'Sortie: Sector '..dest..' <- '..mob.name)
     end
 end)
 
@@ -796,6 +856,32 @@ function scan_all_bitzers()
     for _, idx in ipairs(bitzer_indices) do
         scan_bitzer(idx)
     end
+end
+
+----------------------------------------------------------------------
+-- Sector switch - single owner
+--
+-- Every path that moves `location` routes here: //sort [a-h], the mouse
+-- click on the floor bar, SuperWarp arrival, and NM targeting. One copy is
+-- why the widescan re-track, the boss timer/counter reset and the basement
+-- Bitzer scan cannot drift apart between paths. Callers own their own chat
+-- line; this is silent apart from the debug log.
+----------------------------------------------------------------------
+function set_sector(letter)
+    location = letter
+    local idx = string.byte(location) - string.byte('A') + 1
+    if mob_tracking[idx] then
+        track_on(mob_tracking[idx].index)
+    end
+    -- Reset boss state on any sector switch (per-boss timer/counter)
+    boss_counter = nil
+    boss_timer_start = nil
+    boss_timer_active = false
+    -- Auto-scan Bitzers when entering basement
+    if location >= 'E' and location <= 'H' then
+        scan_all_bitzers()
+    end
+    log('Sector -> '..location)
 end
 
 ----------------------------------------------------------------------
@@ -1082,19 +1168,7 @@ function commands(input, args)
 
     elseif cmd == 'a' or cmd == 'b' or cmd == 'c' or cmd == 'd' or
            cmd == 'e' or cmd == 'f' or cmd == 'g' or cmd == 'h' then
-        location = string.upper(cmd)
-        local idx = string.byte(location) - string.byte('A') + 1
-        if mob_tracking[idx] then
-            track_on(mob_tracking[idx].index)
-        end
-        -- Reset boss state on any sector switch (per-boss timer/counter)
-        boss_counter = nil
-        boss_timer_start = nil
-        boss_timer_active = false
-        -- Auto-scan Bitzers when entering basement
-        if location >= 'E' and location <= 'H' then
-            scan_all_bitzers()
-        end
+        set_sector(string.upper(cmd))
         windower.add_to_chat(8, 'Sortie: Sector '..location)
 
     elseif cmd == 'zone' then
@@ -1135,6 +1209,14 @@ function commands(input, args)
         settings.hide_all = not settings.hide_all
         windower.add_to_chat(8, 'Sortie: Minimal mode '..(settings.hide_all and 'ON (NM+Bitzer only)' or 'OFF'))
 
+    elseif cmd == 'echo' then
+        settings.echo_proc = not settings.echo_proc
+        windower.add_to_chat(8, 'Sortie: Proc echo '..(settings.echo_proc and 'ON' or 'OFF'))
+
+    elseif cmd == 'auto' then
+        settings.auto_sector_target = not settings.auto_sector_target
+        windower.add_to_chat(8, 'Sortie: Auto-sector on NM target '..(settings.auto_sector_target and 'ON' or 'OFF'))
+
     elseif cmd == 'debug' then
         settings.debug = not settings.debug
         windower.add_to_chat(8, 'Sortie: Debug '..(settings.debug and 'ON' or 'OFF'))
@@ -1144,13 +1226,15 @@ function commands(input, args)
         windower.add_to_chat(8, 'Sortie: Scanning all Bitzers zone-wide...')
 
     elseif cmd == 'help' then
-        windower.add_to_chat(8, 'SortiePlus v3.0 Commands:')
+        windower.add_to_chat(8, 'SortiePlus v1.0 Commands:')
         windower.add_to_chat(8, '  //sort [a-h]    - Switch sector display')
         windower.add_to_chat(8, '  //sort on/off    - Toggle addon')
         windower.add_to_chat(8, '  //sort boss      - Toggle boss info display')
         windower.add_to_chat(8, '  //sort obj       - Toggle objectives display')
         windower.add_to_chat(8, '  //sort loot      - Toggle loot/galli display')
         windower.add_to_chat(8, '  //sort all       - Minimal mode (NM+Bitzer only)')
+        windower.add_to_chat(8, '  //sort echo      - Toggle boss proc /echo (D/H)')
+        windower.add_to_chat(8, '  //sort auto      - Toggle sector auto-switch on NM target')
         windower.add_to_chat(8, '  //sort bscan     - Scan Bitzers zone-wide')
         windower.add_to_chat(8, '  //sort save      - Save position settings')
         windower.add_to_chat(8, '  //sort track #   - Track mob by widescan index')
@@ -1216,20 +1300,10 @@ windower.register_event('mouse', function(type, x, y, delta, blocked)
             local sectors = {'A','B','C','D','E','F','G','H'}
             for i = 0, 7 do
                 if x > window_x + 40*i and x < window_x + 40*(i+1) then
-                    location = sectors[i+1]
-                    local idx = i + 1
-                    if mob_tracking[idx] then
-                        windower.add_to_chat(8, 'Sortie: Tracking '..mob_tracking[idx].name)
-                        track_on(mob_tracking[idx].index)
+                    if mob_tracking[i+1] then
+                        windower.add_to_chat(8, 'Sortie: Tracking '..mob_tracking[i+1].name)
                     end
-                    -- Reset boss state on any sector switch
-                    boss_counter = nil
-                    boss_timer_start = nil
-                    boss_timer_active = false
-                    -- Auto-scan Bitzers when entering basement
-                    if location >= 'E' and location <= 'H' then
-                        scan_all_bitzers()
-                    end
+                    set_sector(sectors[i+1])
                     return true
                 end
             end
