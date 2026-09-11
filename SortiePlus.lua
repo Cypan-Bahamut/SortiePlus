@@ -78,7 +78,9 @@ local nm_sector = {}
 -- and indices are stable within Ra'Kaznar and only change with SE dev
 -- updates to Sortie itself.
 --
--- Pattern: id = 21000192 + idx. Upstairs chests grouped by objective
+-- Pattern: id = 21004288 + idx (base shifted +4096 by the 2026-09 SE
+-- update; was 21000192 — idx layout unchanged). Upstairs chests grouped
+-- by objective
 -- number across sectors:
 --   idx 1-4   = Chest #A1..#D1
 --   idx 5-8   = Chest #A2..#D2
@@ -92,7 +94,7 @@ local nm_sector = {}
 --
 -- [C] = confirmed from log, [I] = inferred from consistent pattern
 ----------------------------------------------------------------------
-local CHEST_BASE_ID = 21000192
+local CHEST_BASE_ID = 21004288
 
 -- Maps idx to {name, sector, obj_id, type, confirmed}
 -- obj_id matches the id field in sector_objectives[sector].objs entries
