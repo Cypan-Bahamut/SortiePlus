@@ -5,6 +5,28 @@ and loot — and switches its sector display for you as you move through the zon
 
 Forked from **Sortie v3.0 by Mirdain**. See [Credits and licensing](#credits-and-licensing).
 
+## What's new in 1.1
+
+- **Shard tracker.** One always-visible line — even in minimal mode — showing the
+  A–D Ra'Kaznar shards for the current run:
+
+  ```
+   Shards: A:X B:o C:_ D:_
+  ```
+
+  Green `X` = shard in hand, yellow `o` = its chest (#A3–#D3) has spawned but you
+  haven't looted it yet, `_` = not earned. Resets when you re-enter Sortie.
+- **Boss order line.** `//sort order dhabcm` sets your kill order (a–h, `m` =
+  Aminon); the window shows `Order: D > H > A > B > C > Aminon` with defeated
+  bosses red, the current target green, the rest blue. Boss kills are detected
+  from chat. `//sort order clear` clears it; `//sort save` makes it your default.
+- **Integrated floor bar.** The clickable `[A]–[H]` selector is now the first line
+  of the main window instead of a separate window. The click map follows your font
+  size, and a drag (when unlocked) is never mistaken for a click.
+- **Lock/unlock.** `//sort lock` pins the window; `//sort unlock` lets you drag it.
+- **Darker default background** (alpha 102 → 180). A saved 1.0 default is bumped
+  once automatically; any custom alpha you set is kept.
+
 ## What "Plus" adds
 
 **Auto-sector on NM target.** Target a sector's NM and the display flips to that
@@ -42,7 +64,9 @@ routes through one `set_sector()`, so they cannot drift apart.
   Vivisection echoes `Vivisection >> [NONE]` (absorb cleared). Toggle: `//sort echo`.
 - **Reive info**: Spawn conditions and Naakual kill orders for basement sectors
 - **Basement boss drops**: Shows which Fragment each boss drops for Aminon access
-- **Clickable floor selector** and keyboard commands
+- **Shard tracker**: always-visible A–D shard checkboxes (in hand / chest up / not earned)
+- **Boss order display**: your planned kill order, colored by progress
+- **Clickable floor selector** (first line of the window) and keyboard commands
 
 ## Requirements
 
@@ -60,10 +84,15 @@ Two things to know if you are coming from the original Sortie:
   aliases so it is a drop-in replacement. Running both addons at once means two
   handlers answering the same command — pick one.
 - **Window positions do not carry over.** Windower stores settings per addon name,
-  so SortiePlus starts at the default positions. Either drag the two windows where
-  you want them and `//sortieplus save`, or copy your old
+  so SortiePlus starts at the default position. Either drag the window where
+  you want it (`//sort unlock` first) and `//sortieplus save`, or copy your old
   `Windower/addons/Sortie/data/settings.xml` into `Windower/addons/SortiePlus/data/`
   before first load.
+
+Upgrading from SortiePlus 1.0: the separate floor-selector window is gone — the
+bar is now the first line of the main window. A leftover `<Floor>` block in your
+saved `settings.xml` is harmless, and a saved background alpha of 102 (the old
+default) is bumped to the new darker default once; any other value is kept.
 
 ## Commands
 
@@ -77,10 +106,12 @@ All three prefixes work: `//sortieplus`, `//sortie`, `//sort`.
 | `//sort boss` | Toggle boss info panel |
 | `//sort obj` | Toggle objectives display |
 | `//sort loot` | Toggle loot/galli display |
-| `//sort all` | Minimal mode (NM + Bitzer only) |
+| `//sort all` | Minimal mode (NM + Bitzer + Order + Shards only) |
 | `//sort echo` | Toggle boss proc `/echo` on D/H (default on) |
+| `//sort order xyz` | Set boss kill order (a–h, `m` = Aminon; `clear` to clear) |
+| `//sort lock` / `unlock` | Lock window / unlock for dragging |
 | `//sort bscan` | Scan Bitzers zone-wide |
-| `//sort save` | Save position settings |
+| `//sort save` | Save settings + order as default |
 | `//sort track #` | Track mob by widescan index |
 | `//sort scan #` | Query mob info by index |
 | `//sort debug` | Toggle debug output |

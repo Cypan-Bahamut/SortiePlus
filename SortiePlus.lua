@@ -1,6 +1,6 @@
 _addon.name = 'SortiePlus'
 _addon.author = 'Mirdain; SortiePlus fork by Cypan (Bahamut)'
-_addon.version = '1.0'
+_addon.version = '1.1'
 _addon_description = 'Sortie objective, NM, boss and loot tracker with auto-sector switching'
 _addon.commands = {'sortieplus','sortie','sort'}
 
@@ -25,19 +25,18 @@ default = {
     show_obj = true,
     show_loot = true,
     hide_all = false,
+    boss_order = '',
     Tracking_Box = {
         text = {size=10, font='Consolas', red=255, green=255, blue=255, alpha=255},
         pos  = {x=1313, y=623},
-        bg   = {visible=true, red=0, green=0, blue=0, alpha=102},
-    },
-    Floor = {
-        text = {size=13, font='Consolas', red=255, green=255, blue=255, alpha=255},
-        pos  = {x=1313, y=595},
-        bg   = {visible=true, red=0, green=0, blue=0, alpha=102},
+        bg   = {visible=true, red=0, green=0, blue=0, alpha=180},
     },
 }
 
 settings = config.load(default)
+-- One-time migration to the darker bg default (v1.1): only the old v1.0
+-- default is bumped; any other saved alpha is a user choice and stays.
+if settings.Tracking_Box.bg.alpha == 102 then settings.Tracking_Box.bg.alpha = 180 end
 mob_tracking = {}
 interval = .25
 enabled = false
@@ -48,7 +47,61 @@ gears = {'|','/','-','\\\\'}
 gear = 1
 
 tracking_window = texts.new("", settings.Tracking_Box)
-floor_window    = texts.new("[A] [B] [C] [D] [E] [F] [G] [H]", settings.Floor)
+
+-- Floor picker is the first line of the window. It fills all 50 columns so
+-- the rendered width is exact; ui_cols/ui_rows hold the size of the last
+-- rendered text so a click maps to a letter at any font size.
+local PICKER = '   [ A ] [ B ] [ C ] [ D ] [ E ] [ F ] [ G ] [ H ]'
+local ui_cols, ui_rows = 50, 1
+local CLICK_SLOP = 3
+local click_from = nil
+
+-- Boss order: a-h = sector bosses, m = Aminon. Empty unless set.
+local function parse_order(s)
+    local seen = {}
+    for c in s:gmatch('.') do
+        if not c:match('[a-hm]') then
+            return nil, '"'..c..'" is not a boss letter (a-h, m = Aminon)'
+        end
+        if seen[c] then
+            return nil, c:upper()..' is listed twice'
+        end
+        seen[c] = true
+    end
+    return s
+end
+
+local function order_text(s)
+    local out = {}
+    for c in s:gmatch('.') do
+        out[#out+1] = (c == 'm') and 'Aminon' or c:upper()
+    end
+    return table.concat(out, ' > ')
+end
+
+-- Window variant: defeated bosses red, the current one (first not yet
+-- defeated in the order) green, the rest blue. Chat lines use the plain
+-- order_text above - \cs codes are a texts-lib escape, not a chat one.
+local function order_text_colored(s)
+    local out = {}
+    local current_seen = false
+    for c in s:gmatch('.') do
+        local name = (c == 'm') and 'Aminon' or c:upper()
+        local color
+        if boss_dead[c] then
+            color = '\\cs(220,80,80)'
+        elseif not current_seen then
+            color = '\\cs(0,255,0)'
+            current_seen = true
+        else
+            color = '\\cs(100,149,237)'
+        end
+        out[#out+1] = color..name..'\\cr'
+    end
+    return table.concat(out, ' > ')
+end
+
+settings.boss_order = parse_order(tostring(settings.boss_order or ''):lower()) or ''
 
 ----------------------------------------------------------------------
 -- Objective completion tracking
@@ -58,6 +111,8 @@ aurum_done = {F1=false, F2=false} -- #?: 1/1 per floor
 aurum_progress = {F1_cur=0, F1_max=1, F2_cur=0, F2_max=2}
 nm_dead = {}
 upstairs_nms_killed = {A=false, B=false, C=false, D=false}
+-- Boss kills this run, keyed by order letter (a-h, m = Aminon)
+boss_dead = {}
 -- Tracks obtained temp items: items_got["shard_A"] = true, items_got["key_B"] = true, etc.
 items_got = {}
 -- Bitzer zone-wide scan: stores {x=, y=, z=, name=} per index
@@ -276,6 +331,7 @@ function initialize()
     aurum_done = {F1=false, F2=false}
     aurum_progress = {F1_cur=0, F1_max=1, F2_cur=0, F2_max=2}
     nm_dead = {}
+    boss_dead = {}
     upstairs_nms_killed = {A=false, B=false, C=false, D=false}
     items_got = {}
     bitzer_pos = {}
@@ -489,6 +545,19 @@ windower.register_event('incoming text', function(original, modified, original_m
                 log(nm_name..' killed!')
             end
         end
+    end
+
+    -- Boss-order kills: "Cypan defeats Degei." (any killer name). "was
+    -- defeated by" does not contain "defeats " and cannot false-positive.
+    for letter, bi in pairs(boss_info) do
+        if not boss_dead[letter:lower()] and original:find('defeats '..bi.name, 1, true) then
+            boss_dead[letter:lower()] = true
+            log('Boss killed: '..bi.name..' ['..letter..']')
+        end
+    end
+    if not boss_dead.m and original:find('defeats Aminon', 1, true) then
+        boss_dead.m = true
+        log('Boss killed: Aminon [m]')
     end
 
     -- Boss element tracking (Degei D / Aita H)
@@ -957,6 +1026,8 @@ function tracking_box_update()
     local player = windower.ffxi.get_mob_by_target('me')
     local sector_index = string.byte(location) - string.byte('A') + 1
 
+    lines:insert(PICKER)
+
     -- Header with objective progress (hidden in minimal mode)
     local minimal = settings.hide_all
     if not minimal then
@@ -1007,6 +1078,23 @@ function tracking_box_update()
             lines:insert(" Bitzer: [scanning...]")
         end
     end
+
+    lines:insert(" Order: "..order_text_colored(settings.boss_order))
+
+    -- Shard checkboxes (A-D), always shown (survives minimal mode):
+    -- green X = shard in hand, yellow o = chest #X3 spawned but unlooted,
+    -- _ = not yet earned. Per run (items_got/chest_seen reset on zone).
+    local shard_parts = {}
+    for _, s in ipairs({'A','B','C','D'}) do
+        if items_got['shard_'..s] then
+            table.insert(shard_parts, '\\cs(0,255,0)'..s..':X\\cr')
+        elseif chest_seen_this_run[obj_to_chest_idx[s..'3']] then
+            table.insert(shard_parts, '\\cs(255,255,0)'..s..':o\\cr')
+        else
+            table.insert(shard_parts, s..':_')
+        end
+    end
+    lines:insert(" Shards: "..table.concat(shard_parts, " "))
 
     if not minimal and settings.show_obj then lines:insert("") end
 
@@ -1132,9 +1220,12 @@ function tracking_box_update()
     lines:insert("")
     lines:insert(' Running....                                ['..gears[gear]..']')
 
+    ui_cols = 0
     for i, line in ipairs(lines) do
         lines[i] = lines[i]:rpad(' ', maxWidth)
+        ui_cols = math.max(ui_cols, #(lines[i]:gsub('\\cs%(%d+,%d+,%d+%)', ''):gsub('\\cr', '')))
     end
+    ui_rows = #lines
 
     tracking_window:text(lines:concat('\n'))
 
@@ -1155,7 +1246,7 @@ function commands(input, args)
 
     if cmd == 'save' then
         config.save(settings, windower.ffxi.get_player().name:lower())
-        windower.add_to_chat(8, 'Sortie: Settings saved.')
+        windower.add_to_chat(8, 'Sortie: Settings saved. Default order: '..(settings.boss_order ~= '' and order_text(settings.boss_order) or 'none'))
 
     elseif cmd == 'on' then
         show_UI()
@@ -1209,7 +1300,7 @@ function commands(input, args)
 
     elseif cmd == 'all' then
         settings.hide_all = not settings.hide_all
-        windower.add_to_chat(8, 'Sortie: Minimal mode '..(settings.hide_all and 'ON (NM+Bitzer only)' or 'OFF'))
+        windower.add_to_chat(8, 'Sortie: Minimal mode '..(settings.hide_all and 'ON (NM+Bitzer+Order+Shards only)' or 'OFF'))
 
     elseif cmd == 'echo' then
         settings.echo_proc = not settings.echo_proc
@@ -1218,6 +1309,31 @@ function commands(input, args)
     elseif cmd == 'auto' then
         settings.auto_sector_target = not settings.auto_sector_target
         windower.add_to_chat(8, 'Sortie: Auto-sector on NM target '..(settings.auto_sector_target and 'ON' or 'OFF'))
+
+    elseif cmd == 'order' then
+        local spec = table.concat(args, ''):lower():gsub('[%s,>%-]', '')
+        if spec == '' then
+            windower.add_to_chat(8, 'Sortie: Order '..(settings.boss_order ~= '' and order_text(settings.boss_order) or '(none)')..'  - //sort order <a-h, m=Aminon> | //sort order clear')
+        elseif spec == 'clear' then
+            settings.boss_order = ''
+            windower.add_to_chat(8, 'Sortie: Order cleared')
+        else
+            local order, err = parse_order(spec)
+            if order then
+                settings.boss_order = order
+                windower.add_to_chat(8, 'Sortie: Order '..order_text(order))
+            else
+                windower.add_to_chat(8, 'Sortie: Order not changed - '..err)
+            end
+        end
+
+    elseif cmd == 'lock' then
+        tracking_window:draggable(false)
+        windower.add_to_chat(8, 'Sortie: Window locked')
+
+    elseif cmd == 'unlock' then
+        tracking_window:draggable(true)
+        windower.add_to_chat(8, 'Sortie: Window unlocked - drag to move, //sort save to keep')
 
     elseif cmd == 'debug' then
         settings.debug = not settings.debug
@@ -1228,17 +1344,20 @@ function commands(input, args)
         windower.add_to_chat(8, 'Sortie: Scanning all Bitzers zone-wide...')
 
     elseif cmd == 'help' then
-        windower.add_to_chat(8, 'SortiePlus v1.0 Commands:')
+        windower.add_to_chat(8, 'SortiePlus v1.1 Commands:')
         windower.add_to_chat(8, '  //sort [a-h]    - Switch sector display')
         windower.add_to_chat(8, '  //sort on/off    - Toggle addon')
         windower.add_to_chat(8, '  //sort boss      - Toggle boss info display')
         windower.add_to_chat(8, '  //sort obj       - Toggle objectives display')
         windower.add_to_chat(8, '  //sort loot      - Toggle loot/galli display')
-        windower.add_to_chat(8, '  //sort all       - Minimal mode (NM+Bitzer only)')
+        windower.add_to_chat(8, '  //sort all       - Minimal mode (NM+Bitzer+Order+Shards only)')
         windower.add_to_chat(8, '  //sort echo      - Toggle boss proc /echo (D/H)')
         windower.add_to_chat(8, '  //sort auto      - Toggle sector auto-switch on NM target')
+        windower.add_to_chat(8, '  //sort order xyz - Set boss order (a-h, m=Aminon; clear)')
+        windower.add_to_chat(8, '  //sort lock      - Lock window position')
+        windower.add_to_chat(8, '  //sort unlock    - Unlock window (drag to move)')
         windower.add_to_chat(8, '  //sort bscan     - Scan Bitzers zone-wide')
-        windower.add_to_chat(8, '  //sort save      - Save position settings')
+        windower.add_to_chat(8, '  //sort save      - Save settings + order as default')
         windower.add_to_chat(8, '  //sort track #   - Track mob by widescan index')
         windower.add_to_chat(8, '  //sort scan #    - Query mob info by index')
         windower.add_to_chat(8, '  //sort debug     - Toggle debug output')
@@ -1269,12 +1388,10 @@ end
 
 function show_UI()
     tracking_window:show()
-    floor_window:show()
 end
 
 function hide_UI()
     tracking_window:hide()
-    floor_window:hide()
 end
 
 function log(msg)
@@ -1293,22 +1410,49 @@ function gear_update()
 end
 
 ----------------------------------------------------------------------
--- Mouse click on floor selector
+-- Mouse click on the floor picker (first line of the window)
+--
+-- A press that moves more than CLICK_SLOP before release is a window drag
+-- (//sort unlock), not a pick. Cell size comes from the rendered text
+-- extents, so the hit test follows the font size.
 ----------------------------------------------------------------------
+local function picker_sector(x, y)
+    local px, py = tracking_window:pos()
+    local w, h = tracking_window:extents()
+    px, py = tonumber(px), tonumber(py)
+    if not px or not py or not w or not h or w <= 0 or h <= 0 or ui_cols < 1 or ui_rows < 1 then
+        return nil
+    end
+    local dy = y - py
+    if dy < 0 or dy >= h / ui_rows then return nil end
+    local col = (x - px) / (w / ui_cols)
+    local best, dist = nil, 3
+    for i = 1, #PICKER do
+        local c = PICKER:sub(i, i)
+        if c:match('%u') and math.abs(col - (i - 0.5)) < dist then
+            best, dist = c, math.abs(col - (i - 0.5))
+        end
+    end
+    return best
+end
+
 windower.register_event('mouse', function(type, x, y, delta, blocked)
-    if floor_window:hover(x, y) then
-        if type == 2 then
-            local window_x = tonumber(settings.Floor.pos.x)
-            local sectors = {'A','B','C','D','E','F','G','H'}
-            for i = 0, 7 do
-                if x > window_x + 40*i and x < window_x + 40*(i+1) then
-                    if mob_tracking[i+1] then
-                        windower.add_to_chat(8, 'Sortie: Tracking '..mob_tracking[i+1].name)
-                    end
-                    set_sector(sectors[i+1])
-                    return true
+    if type == 1 then
+        click_from = tracking_window:hover(x, y) and {x = x, y = y} or nil
+        return click_from ~= nil
+    elseif type == 2 and click_from then
+        local from = click_from
+        click_from = nil
+        if math.abs(x - from.x) <= CLICK_SLOP and math.abs(y - from.y) <= CLICK_SLOP then
+            local letter = picker_sector(x, y)
+            if letter then
+                local nm = mob_tracking[string.byte(letter) - string.byte('A') + 1]
+                if nm then
+                    windower.add_to_chat(8, 'Sortie: Tracking '..nm.name)
                 end
+                set_sector(letter)
             end
         end
+        return true
     end
 end)
